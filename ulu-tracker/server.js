@@ -28,6 +28,21 @@ const server=http.createServer(async(req,res)=>{
    return reply(res,200,{uetr,status:data.status,statusLabel:labels[data.status]||'Status provided by bank',lastUpdate:typeof data.lastUpdate==='string'?data.lastUpdate:null,source:'Deutsche Bank',retrievedAt:new Date().toISOString()});
   }catch(e){return reply(res,502,{error:e.name==='AbortError'?'Upstream request timed out':'Unable to reach upstream service'});}
  }
+
+ // PDF MT103 extraction: no persistence; returns only UUID candidates, never the document text.
+ if(req.method==='POST'&&url.pathname==='/api/extract-mt103'){
+  if(req.headers['content-type']!=='application/pdf')return reply(res,415,{error:'Only PDF documents are accepted'});
+  const limit=4*1024*1024;let size=0;const chunks=[];
+  try{
+   for await(const chunk of req){size+=chunk.length;if(size>limit)return reply(res,413,{error:'PDF exceeds 4 MB'});chunks.push(chunk);}
+   const bytes=Buffer.concat(chunks);
+   if(bytes.subarray(0,5).toString()!=='%PDF-')return reply(res,400,{error:'Invalid PDF file'});
+   const pdfParse=(await import('pdf-parse')).default;
+   const parsed=await pdfParse(bytes,{max:12});
+   const found=[...new Set((parsed.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig)||[]).map(x=>x.toLowerCase()))].slice(0,10);
+   return reply(res,200,{uetrs:found,notice:found.length?'Verify extracted UETR against your document':'No text UETR found. Scanned PDFs are not supported.'});
+  }catch{return reply(res,422,{error:'Unable to read PDF text. Encrypted or scanned PDFs may not be supported.'});}
+ }
  if(req.method!=='GET')return reply(res,405,{error:'Method not allowed'});
  const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
  if(filename!=='index.html')return reply(res,404,{error:'Not found'});
