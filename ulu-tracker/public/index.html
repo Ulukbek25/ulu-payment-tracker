@@ -179,6 +179,15 @@ else uploadmsg.append(document.createTextNode(candidates[0]))}catch(e){uploadmsg
 </script>
 <style>
 #ulu-auth-shield{position:fixed;inset:0;z-index:99999;background:#061323;display:flex;align-items:center;justify-content:center;padding:20px;color:#eaf4ff}#ulu-auth-shield[hidden]{display:none}#ulu-auth-card{width:min(430px,100%);padding:32px;border:1px solid #365267;border-radius:18px;background:#0b2135}#ulu-auth-card h2{margin:0 0 20px;color:#55e0ce}#ulu-auth-card input{width:100%;margin:7px 0 15px}#ulu-auth-card button{width:100%}#ulu-auth-error{color:#ffb2b2;margin-top:12px}#ulu-auth-bar{position:fixed;right:14px;bottom:14px;z-index:90;display:none;gap:8px;align-items:center;background:#0b2135;border:1px solid #365267;border-radius:12px;padding:9px;color:white;font-size:12px}#ulu-auth-bar button{padding:8px}#ulu-admin{position:fixed;inset:0;z-index:9999;background:#061323;overflow:auto;padding:30px;color:#eaf4ff;display:none}#ulu-admin section{max-width:850px;margin:auto}#ulu-admin input{margin:7px;width:200px}#ulu-admin button{padding:9px 14px;margin:5px}#ulu-admin table{width:100%;border-collapse:collapse}#ulu-admin td,#ulu-admin th{padding:10px;border-bottom:1px solid #365267;text-align:left}
+/* ULU 6.3.1: prevent authentication UI from appearing in printed reports. */
+@media print {
+  #ulu-auth-shield,
+  #ulu-auth-bar,
+  #ulu-admin,
+  #ulu-auth-card,
+  #ulu-login-form { display:none!important; visibility:hidden!important; }
+  #printReport { display:block!important; }
+}
 </style>
 <div id="ulu-auth-shield"><div id="ulu-auth-card"><h2>ULU · PAYMENT TRACKER</h2><p>Вход для зарегистрированных пользователей</p><form id="ulu-login-form"><label>Логин<input id="ulu-login" required autocomplete="username"></label><label>Пароль<input id="ulu-password" type="password" required autocomplete="current-password"></label><button type="submit">Войти</button><p id="ulu-auth-error" role="alert"></p></form></div></div>
 <div id="ulu-auth-bar"><span id="ulu-user-label"></span><button id="ulu-admin-open" style="display:none">Пользователи</button><button id="ulu-logout">Выйти</button></div>
