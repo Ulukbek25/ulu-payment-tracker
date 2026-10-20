@@ -13,6 +13,17 @@ function reply(res,status,obj){res.writeHead(status,{'Content-Type':'application
 const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');
  if(req.method==='GET'&&url.pathname==='/api/health')return reply(res,200,{ok:true,mode:process.env.DB_API_ENABLED==='true'?'live-configured':'integration-disabled'});
+ if(req.method==='GET'&&url.pathname==='/api/qr'){
+  const uetr=(url.searchParams.get('uetr')||'').trim().toLowerCase();
+  if(!UETR.test(uetr))return reply(res,400,{error:'Invalid UETR'});
+  try{
+   const QRCode=(await import('qrcode')).default;
+   const origin=process.env.PUBLIC_URL||'https://ulu-payment-tracker.onrender.com';
+   const link=new URL('/',origin);link.searchParams.set('uetr',uetr);
+   const png=await QRCode.toBuffer(link.toString(),{type:'png',width:320,margin:1,errorCorrectionLevel:'M'});
+   res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return res.end(png);
+  }catch{return reply(res,500,{error:'QR unavailable'});}
+ }
  if(req.method==='GET'&&url.pathname==='/api/track'){
   const uetr=(url.searchParams.get('uetr')||'').trim().toLowerCase();
   if(!UETR.test(uetr))return reply(res,400,{error:'Invalid UETR format'});
@@ -31,17 +42,41 @@ const server=http.createServer(async(req,res)=>{
 
  // PDF MT103 extraction: no persistence; returns only UUID candidates, never the document text.
  if(req.method==='POST'&&url.pathname==='/api/extract-mt103'){
-  if(req.headers['content-type']!=='application/pdf')return reply(res,415,{error:'Only PDF documents are accepted'});
-  const limit=4*1024*1024;let size=0;const chunks=[];
+  const contentType=(req.headers['content-type']||'').split(';')[0].toLowerCase();
+  const supported=new Set(['application/pdf','image/png','image/jpeg','image/webp','image/bmp','image/tiff']);
+  if(!supported.has(contentType))return reply(res,415,{error:'Unsupported file type'});
+  const limit=5*1024*1024;let size=0;const chunks=[];
   try{
-   for await(const chunk of req){size+=chunk.length;if(size>limit)return reply(res,413,{error:'PDF exceeds 4 MB'});chunks.push(chunk);}
+   for await(const chunk of req){size+=chunk.length;if(size>limit)return reply(res,413,{error:'File exceeds 5 MB'});chunks.push(chunk);}
    const bytes=Buffer.concat(chunks);
-   if(bytes.subarray(0,5).toString()!=='%PDF-')return reply(res,400,{error:'Invalid PDF file'});
-   const pdfParse=(await import('pdf-parse')).default;
-   const parsed=await pdfParse(bytes,{max:12});
-   const found=[...new Set((parsed.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig)||[]).map(x=>x.toLowerCase()))].slice(0,10);
-   return reply(res,200,{uetrs:found,notice:found.length?'Verify extracted UETR against your document':'No text UETR found. Scanned PDFs are not supported.'});
-  }catch{return reply(res,422,{error:'Unable to read PDF text. Encrypted or scanned PDFs may not be supported.'});}
+   const signatures={
+    'application/pdf':bytes.subarray(0,5).toString()==='%PDF-',
+    'image/png':bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])),
+    'image/jpeg':bytes[0]===255&&bytes[1]===216,
+    'image/webp':bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WEBP',
+    'image/bmp':bytes.subarray(0,2).toString()==='BM',
+    'image/tiff':bytes.subarray(0,4).toString()==='II*\0'||bytes.subarray(0,4).toString()==='MM\0*'
+   };
+   if(!signatures[contentType])return reply(res,400,{error:'File content does not match its type'});
+   let extracted='';
+   if(contentType==='application/pdf'){
+    const pdfParse=(await import('pdf-parse')).default;
+    const parsed=await pdfParse(bytes,{max:12});extracted=parsed.text||'';
+   }else{
+    const {createWorker}=await import('tesseract.js');
+    const worker=await createWorker('eng',1,{logger:()=>{}});
+    try{
+      const job=worker.recognize(bytes);
+      const timer=new Promise((_,reject)=>setTimeout(()=>reject(new Error('OCR timeout')),35000));
+      const recognized=await Promise.race([job,timer]);extracted=recognized.data.text||'';
+    }finally{await worker.terminate();}
+   }
+   // OCR often inserts whitespace around hyphens: normalize only UUID-shaped matches.
+   const normalized=extracted.replace(/([0-9a-f])\s*-\s*(?=[0-9a-f])/ig,'$1-');
+   const found=[...new Set((normalized.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig)||[]).map(x=>x.toLowerCase()))].slice(0,10);
+   return reply(res,200,{uetrs:found,notice:found.length?'Verify extracted UETR against your document':'No UETR detected'});
+
+  }catch{return reply(res,422,{error:'Unable to read document. Try a clear PNG/JPG image or a text-based PDF.'});}
  }
  if(req.method!=='GET')return reply(res,405,{error:'Method not allowed'});
  const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);

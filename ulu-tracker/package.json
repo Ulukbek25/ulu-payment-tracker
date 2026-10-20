@@ -1,6 +1,6 @@
 {
   "name": "ulu-payment-tracker",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,6 +10,8 @@
     "node": ">=18"
   },
   "dependencies": {
-    "pdf-parse": "1.1.1"
+    "pdf-parse": "1.1.1",
+    "qrcode": "1.5.4",
+    "tesseract.js": "6.0.1"
   }
 }
