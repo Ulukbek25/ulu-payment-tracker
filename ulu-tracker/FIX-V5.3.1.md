@@ -1,0 +1,1 @@
+Fix: allow image files in the browser file chooser; show HTTP error codes; improve PDF text-extraction diagnostics and Render logs. Note: scanned PDFs still require conversion to PNG/JPG. OCR requires Tesseract language-data download and enough Render memory. Run npm install and test with authorized sample documents before production.

@@ -1,3 +1,4 @@
+import * as auth from './auth.js';
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -12,6 +13,29 @@ const labels={ACSP:'Payment in progress',ACSC:'Settlement completed',ACCC:'Credi
 function reply(res,status,obj){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(obj));}
 const server=http.createServer(async(req,res)=>{
  const url=new URL(req.url,'http://localhost');
+ const ip=req.socket.remoteAddress||'unknown';
+ const sendCookie=(token,clear=false)=>`ulu_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; ${clear?'Max-Age=0':'Max-Age=604800'}`;
+ const body=async()=>{let size=0,chunks=[];for await(const c of req){size+=c.length;if(size>16384)throw Error('Body too large');chunks.push(c)}return JSON.parse(Buffer.concat(chunks).toString('utf8'))};
+ if(req.method==='POST'&&url.pathname==='/api/auth/login'){
+  const now=Date.now(),key='login:'+ip,hits=(requests.get(key)||[]).filter(t=>now-t<900000);if(hits.length>=12)return reply(res,429,{error:'Too many login attempts'});hits.push(now);requests.set(key,hits);
+  try{const {username,password}=await body();if(typeof username!=='string'||typeof password!=='string')return reply(res,400,{error:'Invalid credentials'});const found=await auth.login(username,password);if(!found)return reply(res,401,{error:'Invalid login or password'});res.setHeader('Set-Cookie',sendCookie(found.token));return reply(res,200,{user:found.user});}catch{return reply(res,400,{error:'Invalid request'});}
+ }
+ if(req.method==='POST'&&url.pathname==='/api/auth/logout'){await auth.logout(req);res.setHeader('Set-Cookie',sendCookie('',true));return reply(res,200,{ok:true});}
+ const user=await auth.current(req);
+ if(req.method==='GET'&&url.pathname==='/api/auth/me')return user?reply(res,200,{user}):reply(res,401,{error:'Login required'});
+ if(req.method==='GET'&&url.pathname==='/api/health')return reply(res,200,{ok:true});
+ if(url.pathname.startsWith('/api/')&&!user)return reply(res,401,{error:'Login required'});
+ if(url.pathname==='/api/admin/users'){
+  if(!user.admin)return reply(res,403,{error:'Forbidden'});
+  if(req.method==='GET')return reply(res,200,{users:await auth.users()});
+  if(req.method==='POST')try{const d=await body();if(!/^[a-zA-Z0-9_.-]{3,50}$/.test(d.username||'')||typeof d.password!=='string'||d.password.length<12)return reply(res,400,{error:'Username or password invalid (12+ characters)'});return reply(res,201,{user:await auth.createUser(d.username,d.password)});}catch{return reply(res,400,{error:'User exists or invalid request'});}
+ }
+ if(url.pathname.match(/^\/api\/admin\/users\/\d+\/(active|password)$/)&&req.method==='PATCH'){
+  if(!user.admin)return reply(res,403,{error:'Forbidden'});
+  const [, , , , id,action]=url.pathname.split('/');
+  try{const d=await body();if(action==='active'&&typeof d.active==='boolean')return reply(res,200,{ok:await auth.setActive(id,d.active)});if(action==='password'&&typeof d.password==='string'&&d.password.length>=12)return reply(res,200,{ok:await auth.setPassword(id,d.password)});return reply(res,400,{error:'Invalid request'});}catch{return reply(res,400,{error:'Invalid request'});}
+ }
+
  if(req.method==='GET'&&url.pathname==='/api/health')return reply(res,200,{ok:true,mode:process.env.DB_API_ENABLED==='true'?'live-configured':'integration-disabled'});
  if(req.method==='GET'&&url.pathname==='/api/qr'){
   const uetr=(url.searchParams.get('uetr')||'').trim().toLowerCase();
@@ -28,7 +52,7 @@ const server=http.createServer(async(req,res)=>{
   const uetr=(url.searchParams.get('uetr')||'').trim().toLowerCase();
   if(!UETR.test(uetr))return reply(res,400,{error:'Invalid UETR format'});
   if(process.env.DB_API_ENABLED!=='true')return reply(res,503,{error:'Deutsche Bank integration not enabled. Confirm permission and server access first.',code:'INTEGRATION_DISABLED'});
-  const ip=req.socket.remoteAddress||'unknown';const now=Date.now();const hits=(requests.get(ip)||[]).filter(t=>now-t<60000);if(hits.length>=10)return reply(res,429,{error:'Rate limit exceeded'});hits.push(now);requests.set(ip,hits);
+  const now=Date.now();const hits=(requests.get(ip)||[]).filter(t=>now-t<60000);if(hits.length>=10)return reply(res,429,{error:'Rate limit exceeded'});hits.push(now);requests.set(ip,hits);
   try{
    const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),9000);
    let upstream;try{upstream=await fetch(`${ENDPOINT}?uetr=${encodeURIComponent(uetr)}`,{method:'GET',headers:{Accept:'application/json'},signal:controller.signal,redirect:'error'});}finally{clearTimeout(timeout);}
@@ -61,7 +85,7 @@ const server=http.createServer(async(req,res)=>{
    let extracted='';
    if(contentType==='application/pdf'){
     const pdfParse=(await import('pdf-parse')).default;
-    const parsed=await pdfParse(bytes,{max:12});extracted=parsed.text||'';
+    const parsed=await pdfParse(bytes,{max:12});extracted=parsed.text||''; if(!extracted.trim())return reply(res,422,{error:'PDF has no extractable text. For a scanned PDF, export its page as PNG or JPG.'});
    }else{
     const {createWorker}=await import('tesseract.js');
     const worker=await createWorker('eng',1,{logger:()=>{}});
@@ -76,11 +100,11 @@ const server=http.createServer(async(req,res)=>{
    const found=[...new Set((normalized.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ig)||[]).map(x=>x.toLowerCase()))].slice(0,10);
    return reply(res,200,{uetrs:found,notice:found.length?'Verify extracted UETR against your document':'No UETR detected'});
 
-  }catch{return reply(res,422,{error:'Unable to read document. Try a clear PNG/JPG image or a text-based PDF.'});}
+  }catch(err){console.error('Document extraction error:',err?.message||err);return reply(res,422,{error:'Document recognition failed on server. Check Render logs; try a clear PNG/JPG or text-based PDF.'});}
  }
  if(req.method!=='GET')return reply(res,405,{error:'Method not allowed'});
  const filename=url.pathname==='/'?'index.html':url.pathname.slice(1);
  if(filename!=='index.html')return reply(res,404,{error:'Not found'});
  try{const html=await fs.readFile(path.join(root,'public','index.html'));res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Content-Security-Policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",'X-Content-Type-Options':'nosniff'});res.end(html);}catch{reply(res,500,{error:'Page unavailable'});}
 });
-server.listen(PORT,HOST,()=>console.log(`ULU Tracker listening on ${HOST}:${PORT}`));
+auth.init().then(()=>server.listen(PORT,HOST,()=>console.log(`ULU Tracker listening on ${HOST}:${PORT}`))).catch(e=>{console.error('Auth startup failed:',e.message);process.exit(1)});
