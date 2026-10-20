@@ -3,7 +3,10 @@ import pg from 'pg';
 const {Pool}=pg;
 if(!process.env.DATABASE_URL) throw new Error('DATABASE_URL required for secure authentication');
 if(!process.env.ADMIN_USERNAME||!process.env.ADMIN_PASSWORD||process.env.ADMIN_PASSWORD.length<14)throw new Error('Set ADMIN_USERNAME and ADMIN_PASSWORD (14+ characters)');
-const pool=new Pool({connectionString:process.env.DATABASE_URL,ssl:process.env.DATABASE_URL.includes('localhost')?false:{rejectUnauthorized:true}});
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: false
+});
 const hash=p=>crypto.scryptSync(p, 'ulu-auth-v6',64).toString('hex');
 const hashToken=t=>crypto.createHash('sha256').update(t).digest('hex');
 const same=(a,b)=>a.length===b.length&&crypto.timingSafeEqual(Buffer.from(a),Buffer.from(b));
